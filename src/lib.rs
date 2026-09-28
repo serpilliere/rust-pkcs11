@@ -39,6 +39,8 @@ use std::mem;
 use std::path::Path;
 use std::ptr;
 
+const MAX_SIGNATURE_LEN:u64 = 100_000;
+
 trait CkFrom<T> {
     fn from(_: T) -> Self;
 }
@@ -1311,6 +1313,49 @@ impl Ctx {
                         Ok(signature)
                     }
                     err => Err(Error::Pkcs11(err)),
+                }
+            }
+            err => Err(Error::Pkcs11(err)),
+        }
+    }
+
+    pub fn sign_low_level(
+        &self,
+        session: CK_SESSION_HANDLE,
+        data: &[CK_BYTE],
+        mut has_ptr: bool,
+        mut signatureLen: CK_ULONG,
+    ) -> Result<(CK_ULONG, Vec<CK_BYTE>), Error> {
+        self.initialized()?;
+
+        if signatureLen > MAX_SIGNATURE_LEN {
+            return Err(Error::Pkcs11(CKR_GENERAL_ERROR));
+        }
+        // To be compatible with API that sends 0 len
+        if signatureLen == 0 {
+            signatureLen = MAX_SIGNATURE_LEN;
+            has_ptr = true;
+        }
+        let mut signature_data = vec![0; signatureLen as usize];
+        let signature_ptr = if has_ptr {
+            signature_data.as_mut_ptr()
+        } else {
+            ptr::null_mut()
+        };
+
+        let mut data = data.to_vec();
+        match (self.C_Sign)(
+            session,
+            data.as_mut_ptr(),
+            data.len() as CK_ULONG,
+            signature_ptr,
+            &mut signatureLen,
+        ) {
+            CKR_OK => {
+                if has_ptr {
+                    Ok((signatureLen, signature_data))
+                } else {
+                    Ok((signatureLen, vec![]))
                 }
             }
             err => Err(Error::Pkcs11(err)),
